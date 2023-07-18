@@ -1,0 +1,12 @@
+{
+  "name": "vanillify-subgraph-schema",
+  "version": "0.0.1",
+  "repository": "https://github.com/0xTARC/vanillify-subgraph-schema",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "genVanillaSchema": "node vanillify-subgraph-schema.js"
+  },
+  "devDependencies": {
+    "graphql": "^16.7.1"
+  }
+}

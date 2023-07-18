@@ -1,0 +1,646 @@
+type Factory @entity {
+  # factory address
+  id: ID!
+  # amount of pools created
+  poolCount: BigInt!
+  # current owner of the factory
+  owner: ID!
+}
+
+type PanopticFactory @entity {
+  # factory address
+  id: ID!
+  # amount of pools created
+  poolCount: BigInt!
+  # current owner of the factory
+  owner: ID!
+}
+
+# stored USD calculations
+type Bundle @entity {
+  id: ID!
+  # price of ETH in usd
+  ethPriceUSD: BigDecimal!
+}
+
+type Account @entity {
+  # account address
+  id: ID!
+  # chunks created by this account
+  chunks: [Chunk!]! @derivedFrom(field: "sender")
+  # TokenIds owned by this account
+  accountBalances: [AccountBalance!]! @derivedFrom(field: "sender")
+  # Subaccounts for PanopticPools where this Account has options activity
+  panopticPoolAccount: [PanopticPoolAccount!] @derivedFrom(field: "account") 
+
+  # TODO: Time Data, but it's the lowest prio. probably get to just before the gated launch
+  # TODO: The balanceData is the snapshot of the collateral balance over time. The requiredData is the amount of collateral that is required for the options deployed.
+  # "These will be updated whenever the user deposit/withdraw/mint/burn/roll, but let's not focus on that right as this is a secondary quantity (it needs the deposit/withdraw/mint/burn/roll to be tracked first)
+  # historical balance Data
+  # balance: [timeData!]!
+  # historical required Data
+  # required: [timeData!]!"
+}
+
+# All TokenIds held by a certain account & balance source
+# Balance sources could be NFPM, SFPM, one of the many PanopticPools, an EOA, or other
+# The distinction between sources is important because it allows us to distinguish whenever
+# TokenIds are related to panoptions or not by looking at the `owner` field
+type AccountBalance @entity {
+  # owner + '#' + sender (e.g. user address) + "#" + tokenId, to distinguish NFPM/SFPM positions from PanopticPool positions
+  id: ID!
+  # creator of this AccountToken balance (e.g. NFPM Account, SFPM Account, PanopticPool)
+  owner: Account!
+  # initiator of this txn (account responsible)
+  sender: Account!
+  # tokenId
+  tokenId: TokenId!
+  # amount of tokenId
+  tokenCount: BigInt! 
+  # address of account + '#' + address of PanopticPool. null if the tokenId exists outside of PanopticPools, like an LP position created through direct interaction with the SFPM / NFPM.
+  panopticPoolAccount: PanopticPoolAccount
+
+  # Creation timestamp
+  createdTimestamp: BigInt!
+  # Creation block number
+  createdBlockNumber: BigInt!
+
+  # how to store transactions here?
+  # i might mint at t=0, burn at t=1, re-mint at t=2
+}
+
+type PanopticPoolAccount @entity {
+  # address of account + '#' + address of panoptic pool
+  id: ID!
+  # panoptic pool address
+  panopticPool: PanopticPool!
+  # account address
+  account: Account!
+  # Collateral balances for a given account in a given Panoptic Pool
+  # There will be 2 per PanopticPool, one for each token
+  collateral0: Collateral!
+  collateral0Shares: BigInt!
+  collateral1: Collateral!
+  collateral1Shares: BigInt!
+
+  # tokenId balances that this PanopticPoolAccount is responsible for
+  accountBalances: [AccountBalance!]! @derivedFrom(field: "panopticPoolAccount")
+
+  # liquidation prices for account's tokenIds in this pool
+  liquidationPriceUp: BigInt
+  liquidationPriceDown: BigInt
+}
+
+type Token @entity {
+  # token address
+  id: ID!
+  # token decimals
+  decimals: BigInt!
+  # token name
+  name: String!
+  # token symbol
+  symbol: String!
+  # token total supply
+  totalSupply: BigInt!
+  # number of transactions across all pools that include this token
+  txCount: BigInt!
+
+  # my additions, part of og uniswap subgraph
+  # derived price in ETH, used to provide human readable price
+  derivedETH: BigDecimal!
+  # pools token is in that are white listed for USD pricing
+  whitelistPools: [Pool!]!
+
+  # Panoptic pools this token is in
+  # panopticPools: [PanopticPool!]!
+}
+
+# Underlying pool (e.g. Uniswap V3 Pool)
+type Pool @entity {
+  # pool address
+  id: ID!
+  # fee amount
+  feeTier: BigInt!
+  # min space between ticks
+  tickSpacing: BigInt!
+  # token0
+  token0: Token!
+  # token1
+  token1: Token!
+  # total transaction count
+  txCount: BigInt!
+
+  # in range liquidity
+  liquidity: BigInt!
+  # current price tracker
+  sqrtPrice: BigInt!
+  # current tick
+  tick: BigInt
+  # Timestamp of the last time this tick was updated 
+  tickLastUpdateTimestamp: BigInt!
+  # Block number of the last time this tick was updated 
+  tickLastUpdateBlockNumber: BigInt!
+
+  # snapshots of pool data
+  poolHourData: [PoolHourData!]! @derivedFrom(field: "pool")
+  poolDayData: [PoolDayData!]! @derivedFrom(field: "pool")
+
+  # my additions, based on og uniswap subgraph
+  # token0 per token1
+  token0Price: BigDecimal!
+  # token1 per token0
+  token1Price: BigDecimal!
+  # total token 0 across all ticks
+  totalValueLockedToken0: BigDecimal!
+  # total token 1 across all ticks
+  totalValueLockedToken1: BigDecimal!
+
+  # Associated PanopticPool. Null if not created yet
+  panopticPool: PanopticPool
+}
+
+# NFPM has 1 chunk
+# SFPM up to 4
+# To construct histogram, uniswap had to have Tick
+# With Chunk we can go through all chunks
+# Show me 5% wide/25% wide chunks
+# We will need to query by owner
+
+# TODO:
+# Make sure chunk IDs contain whether the chunk was created by panoptic pool OR by another account
+# Buys can only happen on chunks where options have been sold - check if this is owner or sender
+type Chunk @entity {
+  # In the contracts, uniquely identified by this chunk's `positionKey`, an abi.encodePacked tuple of (underlying pool address, account address, tokenType, tickLower, and tickUpper)
+  # When minted through Uniswap's NFPM, tokenType is always 1 (for put)
+  # For more information, see: https://github.com/panoptic-labs/Panoptic/blob/b33788f414d3101448309212dd66654e63c6a31d/contracts/SemiFungiblePositionManager.sol#L936-L944
+  # For now, ID is a concatenated string of: poolAddress + # + event.params.sender.toHexString() + # + tokenType.toString() + # + event.params.tickLower.toString() + # + event.params.tickUpper.toString()
+  id: ID!
+  # creator of this chunk (e.g. NFPM Account)
+  owner: Account!
+  # initiator of this txn
+  sender: Account!
+  # lower tick of the position
+  tickLower: BigInt!
+  # upper tick of the position
+  tickUpper: BigInt!
+  # avg. of tickLower & tickUpper
+  strike: BigInt!
+  # (tickUpper - tickLower) / pool.tickSpacing
+  width: BigInt!
+  # put/call: which token is moved when deployed (0 -> token0, 1 -> token1)
+  tokenType: BigInt!
+  # Pool where this chunk exists
+  pool: Pool!
+
+  # The rules for modifying total, net, short, and long liquidity are as follows:
+  # If txn is sent from NFPM, mint adds to total liquidity, adds to net & short liquidity, long has no meaning
+  # If txn is sent from NFPM, burn decreases total liquidity, decreases net & short liquidity
+
+  # If txn is sent from SFPM, if a leg has isLong=0, and SFPM emits TokenizedPositionMinted. it is minting liquidity into uniswap, so increment net, total, and short liquidity
+  # If txn sent from SFPM, if a leg has isLong=1, and SFPM emits TokenizedPositionMinted, it is burning liquidity from uniswap, so decrease net, increases long, and doesn't touch totalLiquidity
+  # If txn sent from SFPM, if a leg has isLong=0, and SFPM emits TokenizedPositionBurnt, it is burning liquidity from uniswap, so decrease net, decrease short, and decrease totalLiquidity
+  # If txn sent from SFPM, if a leg has isLong=1, and SFPM emits TokenizedPositionBurnt, it is minting liquidity into uniswap, so increase net, decrease long, and doesn't touch totalLiquidity
+
+  # net liquidity in chunk
+  netLiquidity: BigInt!
+  # short liquidity in chunk
+  shortLiquidity: BigInt!
+  # long liquidity in chunk
+  longLiquidity: BigInt!
+  # total long positions in chunk
+  shortCounts: BigInt!
+  # total short positions in chunk
+  longCounts: BigInt!
+  # total liquidity in chunk
+  totalLiquidity: BigInt!
+  # legs created on this chunk of liquidity
+  legs: [Leg!]! @derivedFrom(field: "chunk")
+}
+
+type Leg @entity {
+  # id is the tuple (numeraire, optionRatio, isLong, tokenType, riskPartner, strike, width) from LSB to MSB, in BigInt form, cast to a string
+  # See TokenId entity for more details, or the source here: https://github.com/panoptic-labs/Panoptic/blob/b33788f414d3101448309212dd66654e63c6a31d/contracts/libraries/TokenId.sol#L29
+  # 
+  id: ID!
+  # pool position is within
+  pool: Pool!
+  # number of contracts per leg
+  optionRatio: BigInt!
+  # numeraire of 0 token0, 1 for token1
+  numeraire: BigInt!
+  # token type
+  tokenType: BigInt!
+  # is it a long leg?
+  isLong: BigInt!
+  # risk partner
+  riskPartner: BigInt!
+  # strike
+  strike: BigInt!
+  # width
+  width: BigInt!
+  # Chunk data
+  chunk: Chunk!
+  # How many of this Leg exist
+  legCount: BigInt!
+  # TokenIds which this leg exists in
+  tokenIds: [TokenId!]! @derivedFrom(field: "legs")
+}
+
+# An ERC-1155 ID representing a position
+type TokenId @entity {
+  # The TokenId for this option. See the solidity for more. The following is pasted from the contracts for reference.
+  # See: https://github.com/panoptic-labs/Panoptic/blob/b33788f414d3101448309212dd66654e63c6a31d/contracts/libraries/TokenId.sol#L28 for more.
+  # @dev PACKING RULES FOR A TOKENID:
+  # @dev this is how the token Id is packed into its bit-constituents containing position information.
+  # @dev the following is a diagram to be read top-down in a little endian format
+  # @dev (so (1) below occupies the first 64 least significant bits, e.g.):
+  # @dev From the LSB to the MSB:
+  # ===== 1 time (same for all legs) ==============================================================
+  #      Property         Size      Offset      Comment
+  # (1) univ3pool        64bits     0bits      : first 8 bytes of the Uniswap v3 pool address (first 64 bits; little-endian)
+  # ===== 4 times (one for each leg) ==============================================================
+  # (2) numeraire         1bit      0bits      : Specifies the numeraire (0: token0, 1: token1)
+  # (3) optionRatio       7bits     1bits      : number of contracts per leg
+  # (4) isLong            1bit      8bits      : long==1 means liquidity is removed, long==0 -> liquidity is added
+  # (5) tokenType         1bit      9bits      : put/call: which token is moved when deployed (0 -> token0, 1 -> token1)
+  # (6) riskPartner       2bits     10bits     : normally its own index. Partner in defined risk position otherwise
+  # (7) strike           24bits     12bits     : strike price; defined as (tickUpper + tickLower) / 2
+  # (8) width            12bits     36bits     : width; defined as (tickUpper - tickLower) / 2
+  # Total                48bits                : Each leg takes up this many bits
+  # ===============================================================================================
+  # The bit pattern is therefore, in general:
+  #
+  #                        (strike price tick of the 3rd leg)
+  #                            |             (width of the 2nd leg)
+  #                            |                   |
+  # (8)(7)(6)(5)(4)(3)(2)  (8)(7)(6)(5)(4)(3)(2)  (8)(7)(6)(5)(4)(3)(2)   (8)(7)(6)(5)(4)(3)(2)        (1)
+  #  <---- 48 bits ---->    <---- 48 bits ---->    <---- 48 bits ---->     <---- 48 bits ---->    <- 64 bits ->
+  #         Leg 4                  Leg 3                  Leg 2                   Leg 1         Univ3 Pool Address
+  #
+  #  <--- most significant bit                                                       least significant bit --->
+  #
+  id: ID!
+  # pool position is within
+  pool: Pool!
+  # How many of this TokenId exist
+  tokenCount: BigInt!
+  # legs in this tokenId
+  legs: [Leg!]!
+}
+
+type Transaction @entity {
+  # txn hash
+  id: ID!
+  # block txn was included in
+  blockNumber: BigInt!
+  # timestamp txn was confirmed
+  timestamp: BigInt!
+  # gas used during txn execution
+  gasUsed: BigInt!
+  gasPrice: BigInt!
+
+  # uni types
+  mints: [Mint]! @derivedFrom(field: "transaction")
+  collects: [Collect]! @derivedFrom(field: "transaction")
+  burns: [Burn]! @derivedFrom(field: "transaction")
+
+  rolls: [Roll]! @derivedFrom(field: "transaction") # SFPM - RollTokenizedPosition
+  # opt types
+  optionMints: [OptionMint]! @derivedFrom(field: "transaction")
+  optionBurns: [OptionBurn]! @derivedFrom(field: "transaction")
+  optionRolls: [OptionRoll]! @derivedFrom(field: "transaction")
+  liquidations: [Liquidation]! @derivedFrom(field: "transaction")
+  forcedExercises: [ForcedExercise]! @derivedFrom(field: "transaction")
+}
+
+type Mint @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # amount of liquidity minted
+  amount: BigInt!
+  # amount of token 0 minted
+  amount0: BigDecimal!
+  # amount of token 1 minted
+  amount1: BigDecimal!
+  # Chunk data
+  chunks: [Chunk!]!
+  # owner of position where liquidity minted to
+  owner: Account!
+  # the address that minted the liquidity
+  sender: Account!
+  # which txn the mint was included in
+  transaction: Transaction!
+  # pool position is within
+  pool: Pool!
+  # allow indexing by tokens
+  token0: Token!
+  # allow indexing by tokens
+  token1: Token!
+  # order within the txn
+  logIndex: BigInt
+}
+
+type Collect @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # which txn the mint was included in
+  transaction: Transaction!
+  # pool position is within
+  pool: Pool!
+  # owner of position where liquidity minted to
+  owner: Account!
+  # the address that minted the liquidity
+  sender: Account!
+  # amount of token 0 minted
+  amount0: BigDecimal!
+  # amount of token 1 minted
+  amount1: BigDecimal!
+  # Chunk data
+  chunks: [Chunk!]!
+  # order within the txn
+  logIndex: BigInt
+}
+
+type Burn @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # amount of liquidity minted
+  amount: BigInt!
+  # amount of token 0 minted
+  amount0: BigDecimal!
+  # amount of token 1 minted
+  amount1: BigDecimal!
+  # Chunk data
+  chunks: [Chunk!]!
+  # owner of position where liquidity minted to
+  owner: Account!
+  # the address that minted the liquidity
+  sender: Account!
+  # which txn the mint was included in
+  transaction: Transaction!
+  # pool position is within
+  pool: Pool!
+  # allow indexing by tokens
+  token0: Token!
+  # allow indexing by tokens
+  token1: Token!
+  # order within the txn
+  logIndex: BigInt
+}
+
+type Roll @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # amount of liquidity minted
+  amountOld: BigInt!
+  # amount of token 0 minted
+  amount0Old: BigDecimal!
+  # amount of token 1 minted
+  amount1Old: BigDecimal!
+  # amount of liquidity minted
+  amountNew: BigInt!
+  # amount of token 0 minted
+  amount0New: BigDecimal!
+  # amount of token 1 minted
+  amount1New: BigDecimal!
+  # Chunk data
+  chunksOld: [Chunk!]!
+  # Chunk data
+  chunksNew: [Chunk!]!
+  # owner of position where liquidity minted to
+  owner: Account!
+  # the address that minted the liquidity
+  sender: Account!
+  # which txn the mint was included in
+  transaction: Transaction!
+  # pool position is within
+  pool: Pool!
+  # allow indexing by tokens
+  token0: Token!
+  # allow indexing by tokens
+  token1: Token!
+  # order within the txn
+  logIndex: BigInt
+}
+
+type OptionMint @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # the account that minted the option
+  owner: Account!
+  # initiator of this txn
+  sender: Account!
+  # TokenId of the created option
+  tokenId: TokenId!
+  # size of the position
+  positionSize: BigInt!
+  # Tick at which the option was minted
+  atTick: BigInt!
+  # pool utilization token0
+  poolUtilization0: BigInt!
+  # pool utilization token1
+  poolUtilization1: BigInt!
+  # pointer to txn containing this mint
+  transaction: Transaction!
+  # order within the txn
+  logIndex: BigInt!
+  # panopticPool position is within
+  panopticPool: PanopticPool!
+  # panopticPoolAccount executing this transaction
+  panopticPoolAccount: PanopticPoolAccount!
+}
+
+# TODO: not sure why ForcedExercise and Liquidation have a list of OptionBurns
+type OptionBurn @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # User that burnt the option
+  owner: Account!
+  # initiator of this txn
+  sender: Account!
+  # TokenId data
+  tokenId: TokenId!
+  # size of the position
+  positionSize: BigInt!
+  # Tick at which the option was burnt
+  atTick: BigInt!
+  # premia0
+  premia0: BigInt!
+  # premia1
+  premia1: BigInt!
+  # pointer to txn containing this burn
+  transaction: Transaction!
+  # order within the txn
+  logIndex: BigInt!
+  # panopticPool position is within
+  panopticPool: PanopticPool!
+  # panopticPoolAccount executing this transaction
+  panopticPoolAccount: PanopticPoolAccount!
+}
+
+type OptionRoll @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+  # User that burnt the option
+  owner: Account!
+  # initiator of this txn
+  sender: Account!
+  # TokenId data
+  tokenIdOld: TokenId!
+  # TokenId data
+  tokenIdNew: TokenId!
+  # size of the position
+  positionSize: BigInt!
+  # premia0
+  premia0: BigInt!
+  # premia1
+  premia1: BigInt!
+  # pool utilization token0
+  poolUtilization0: BigInt!
+  # pool utilization token1
+  poolUtilization1: BigInt!
+  # pointer to txn containing this roll
+  transaction: Transaction!
+  # order within the txn
+  logIndex: BigInt!
+  # panopticPool position is within
+  panopticPool: PanopticPool!
+  # panopticPoolAccount executing this transaction
+  panopticPoolAccount: PanopticPoolAccount!
+}
+
+type Liquidation @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+
+  # the account that was liquidated
+  liquidatee: Account!
+  # the account that did the liquidating
+  liquidator: Account!
+  # the tokenIds liquidated from the account
+  tokenIds: [TokenId!]!
+  # bonusAmount0
+  bonusAmount0: BigDecimal!
+  # bonusAmount1
+  bonusAmount1: BigDecimal!
+
+  # TODO: original below
+  # optionBurns: [OptionBurn]! @derivedFrom(field: "liquidation")
+  # Reasoning: does a Liquidation really "have many" OptionBurns?
+
+  # pointer to txn containing this liquidation
+  transaction: Transaction!
+  # order within the txn
+  logIndex: BigInt
+  # panopticPool position is within
+  panopticPool: PanopticPool!
+  # panopticPoolAccount affected by this transaction
+  panopticPoolAccount: PanopticPoolAccount!
+}
+
+type ForcedExercise @entity {
+  # transaction hash + "#" + logIndex
+  id: ID!
+
+  # the account that was exercised
+  exercisee: Account!
+  # the account that did the exercising
+  exercisor: Account!
+  # the exercised tokenId
+  tokenId: TokenId!
+  # exercise fee0
+  exerciseFee0: BigDecimal!
+  # exercise fee1
+  exerciseFee1: BigDecimal!
+  # pointer to txn containing this forced exercise
+  transaction: Transaction!
+  # original below. reasoning same as in Liquidation
+  # optionBurns: [OptionBurn]! @derivedFrom(field: "transaction")
+  # order within the txn
+  logIndex: BigInt
+  # panopticPool position is within
+  panopticPool: PanopticPool!
+  # panopticPoolAccount affected by this transaction
+  panopticPoolAccount: PanopticPoolAccount!
+}
+
+type Collateral @entity {
+  # address of CollateralTracker for pool
+  id: ID!
+  # address of underlying token
+  token: Token!
+  # token asset supply
+  totalAssets: BigInt!
+  # total shares supply (receipts to claim assets)
+  totalShares: BigInt!
+  # tokens in AMM
+  inAMM: BigInt!
+  # pool utilization, 0-1 to represent a percentage of how many funds are in the Panoptic pool versus the AMM pool
+  poolUtilization: BigDecimal!
+  # the PanopticPool being collateralized
+  panopticPool: PanopticPool!
+  # Index of 0 or 1, indicating if this is collateralTracker0 or collateralTracker1 in its parent PanopticPool
+  index: BigInt!
+}
+
+type PanopticPool @entity {
+  # pool address
+  id: ID!
+  # total transaction count
+  txCount: BigInt!
+  # token0
+  token0: Token!
+  # token1
+  token1: Token!
+  # fee amount
+  feeTier: BigInt!
+  # vault for token 0 collateral
+  collateral0: Collateral!
+  # vault for token 1 collateral
+  collateral1: Collateral!
+  # underlying pool
+  underlyingPool: Pool!
+  # the id of the Factory-issued rare NFT minted as part of deploying the Panoptic pool (NOT the option position in the SFPM)
+  rareNftId: BigInt!
+  # the rarity of the deployed Panoptic Pool (associated with a rare NFT).
+  rarity: BigInt!
+}
+
+# Data accumulated and condensed into day stats for each pool
+type PoolDayData @entity {
+  # timestamp rounded to current day by dividing by 86400
+  id: ID!
+  # pointer to pool
+  pool: Pool!
+  # timestamp rounded to current day by dividing by 86400
+  date: Int!
+  # numebr of transactions during period
+  txCount: BigInt!
+  # opening price of token0
+  open: BigDecimal!
+  # high price of token0
+  high: BigDecimal!
+  # low price of token0
+  low: BigDecimal!
+  # close price of token0
+  close: BigDecimal!
+}
+
+type PoolHourData @entity {
+  # format: <pool address>#<timestamp>
+  id: ID!
+  # pointer to pool
+  pool: Pool!
+  # opening price of token0
+  open: BigDecimal!
+  # close price of token0
+  close: BigDecimal!
+  # high price of token0
+  high: BigDecimal!
+  # low price of token0
+  low: BigDecimal!
+  # number of transactions during period
+  txCount: BigInt!
+  # unix timestamp for start of hour
+  periodStartUnix: Int!
+}
