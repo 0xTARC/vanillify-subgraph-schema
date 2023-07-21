@@ -35,7 +35,22 @@ const newSchemaAST = {
       kind: "DirectiveDefinition",
       description: undefined,
       name: { kind: "Name", value: "entity" },
-      arguments: [],
+      arguments: [
+        {
+          kind: "InputValueDefinition",
+          name: {
+            kind: "Name",
+            value: "immutable",
+          },
+          type: {
+            kind: "NamedType",
+            name: {
+              kind: "Name",
+              value: "Boolean",
+            },
+          },
+        },
+      ],
       repeatable: false,
       locations: [{ kind: "Name", value: "OBJECT" }],
     },
